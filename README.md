@@ -18,7 +18,11 @@
 # load secrets
 source .envrc
 
-# might have to comment out aws/org1/shared_tfstate_backend.template the first run because buckets don't exist yet
+# On first run, the S3 buckets for Terraform state don't exist yet.
+# Temporarily disable the S3 backend by creating an empty backend file.
+# After the state buckets are created, restore the template and re-run init
+# to migrate state to the remote backend.
+cp aws/org1/shared_tfstate_backend.template aws/org1/shared_tfstate_backend.template.backup
 echo > aws/org1/shared_tfstate_backend.template
 
 # format terraform workspace files
@@ -34,9 +38,11 @@ bash .github/tf.sh aws/org1/playground_rswea/foundation apply
 bash .github/tf.sh aws/org1/security_aggregator/foundation apply
 bash .github/tf.sh aws/org1/security_cloudtrail/foundation apply
 
-# restore aws/org1/shared_tfstate_backend.template after the tfstate buckets are created
-# Then re-run so it migrates terraform.tfstate to the s3 remote backend
+# Restore the S3 backend configuration after the tfstate buckets are created
+# Then re-run init to migrate terraform.tfstate to the remote backend.
+# Use the backup file created earlier, or checkout from git:
 git checkout aws/org1/shared_tfstate_backend.template
+# Alternative: cp aws/org1/shared_tfstate_backend.template.backup aws/org1/shared_tfstate_backend.template
 
 bash .github/tf.sh aws/org1/prod_management/foundation apply
 bash .github/tf.sh aws/org1/deployment_builds/foundation apply
