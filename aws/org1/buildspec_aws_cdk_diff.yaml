@@ -1,3 +1,45 @@
+# ============================================================================
+# CDK Diff Buildspec
+# ============================================================================
+# This buildspec implements an IMPLICIT state machine with exit codes.
+#
+# State Machine Diagram:
+# ┌─────────────────┐
+# │   Install       │─── Install Node.js, CDK CLI
+# └────────┬────────┘
+#          │
+#          ▼
+# ┌─────────────────┐
+# │   Pre-Build     │─── Run pre_build.sh
+# └────────┬────────┘
+#          │
+#          ▼
+# ┌─────────────────┐
+# │    Build        │─── Run cdk diff
+# │                 │     Exit code captured in CDK_DIFF_EXIT_CODE
+# └────────┬────────┘
+#          │
+#          ▼
+# ┌─────────────────┐
+# │   Post-Build    │─── Check CDK_DIFF_EXIT_CODE
+# │   (Implicit     │     0 → NO_CHANGES (exit to skip Deploy)
+# │    State        │     1 → CHANGES_FOUND (proceed to Deploy)
+# │    Machine)     │     2 → ERROR (fail pipeline)
+# └─────────────────┘
+#
+# EXIT CODE REFERENCE:
+#   0 = No changes detected (succeed, skip Deploy)
+#   1 = Changes found (succeed, proceed to Deploy/Approval)
+#   2 = Error (fail the build)
+#
+# NOTE: These exit codes are DIFFERENT from Terraform exit codes:
+#   - CDK:  0=no changes, 1=changes, 2=error
+#   - TF:   0=no changes, 2=changes, 1=error
+#
+# For explicit state machine implementation, see:
+#   modules/pipeline-state-machine/
+# ============================================================================
+
 artifacts:
   files:
     - '**/*'

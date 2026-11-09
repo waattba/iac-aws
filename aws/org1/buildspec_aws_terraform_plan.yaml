@@ -1,3 +1,47 @@
+# ============================================================================
+# Terraform Plan Buildspec
+# ============================================================================
+# This buildspec implements an IMPLICIT state machine with exit codes.
+#
+# State Machine Diagram:
+# ┌─────────────────┐
+# │   Install       │─── Install Terraform CLI
+# └────────┬────────┘
+#          │
+#          ▼
+# ┌─────────────────┐
+# │   Pre-Build     │─── Run pre_build.sh
+# └────────┬────────┘
+#          │
+#          ▼
+# ┌─────────────────┐
+# │    Build        │─── Run terraform plan
+# │                 │     Exit code captured in TF_PLAN_EXIT_CODE
+# └────────┬────────┘
+#          │
+#          ▼
+# ┌─────────────────┐
+# │   Post-Build    │─── Check TF_PLAN_EXIT_CODE
+# │   (Implicit     │     0 → NO_CHANGES (exit to skip Apply)
+# │    State        │     2 → CHANGES_FOUND (proceed to Apply)
+# │    Machine)     │     1 → ERROR (fail pipeline)
+# └─────────────────┘
+#
+# EXIT CODE REFERENCE:
+#   0 = No changes detected (succeed, skip Apply)
+#   2 = Changes found (succeed, proceed to Apply/Approval)
+#   1 = Error (fail the build)
+#   
+# See: https://developer.hashicorp.com/terraform/cli/commands/plan#detailed-exit-codes
+#
+# IMPORTANT: Terraform exit codes are DIFFERENT from CDK:
+#   - TF:   0=no changes, 2=changes, 1=error
+#   - CDK:  0=no changes, 1=changes, 2=error
+#
+# For explicit state machine implementation, see:
+#   modules/pipeline-state-machine/
+# ============================================================================
+
 artifacts:
   files:
     - '**/*'

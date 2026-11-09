@@ -2,13 +2,27 @@ locals {
   FullRepositoryId      = "johnko/iac-aws"
   workspace_path_prefix = "aws/org1/"
 
+  # Stage names for consistency across the infrastructure
+  # NOTE: These are also defined in the state machine module for DRY principle.
+  # Changes here should be reflected in the state machine module if they diverge.
+  stage_names = {
+    cdk = { plan = "Diff", deploy = "Deploy" }
+  }
+
   # CDK diff exit code definitions for pipeline conditional logic
   # These values are returned by CDK_DIFF_EXIT_CODE environment variable
   # and used in the Deploy stage before_entry condition
+  #
+  # IMPORTANT: These exit codes are now centralized and self-documenting.
+  # See the state machine module for the authoritative source of truth.
+  # The definitions below are kept for backward compatibility with
+  # existing CodePipeline conditional logic and can be removed in a future
+  # breaking change release once CodePipeline natively integrates with
+  # Step Functions conditions.
   cdk_diff_exit_codes = {
-    NO_CHANGES     = "0" # Succeeded with empty diff - skip Deploy stage
-    CHANGES_FOUND  = "1" # Succeeded with non-empty diff - continue to Deploy
-    ERROR          = "2" # Error during diff - pipeline will fail
+    NO_CHANGES    = "0" # Succeeded with empty diff - skip Deploy stage
+    CHANGES_FOUND = "1" # Succeeded with non-empty diff - continue to Deploy
+    ERROR         = "2" # Error during diff - pipeline will fail
   }
 
   aws_cdk_pipelines = {
@@ -499,4 +513,93 @@ resource "aws_codepipeline" "cdk" {
     }
   }
 
+}
+
+# ============================================================================
+# STATE MACHINE INTEGRATION
+# ============================================================================
+# The following modules instantiate explicit state machines that replace the
+# implicit state logic scattered throughout the codebase.
+#
+# Benefits:
+# - UX: Clear notifications about why stages are skipped
+# - DX: Centralized exit code handling in one module
+# - AX: Self-documenting workflows visible in Step Functions console
+#
+# These state machines are created alongside existing infrastructure and
+# do NOT break any existing pipelines. They provide visibility and optional
+# integration points for future enhancements.
+# ============================================================================
+
+# SNS Topic for state machine notifications (separate from rejection SNS)
+resource "aws_sns_topic" "cdk_pipeline_notifications" {
+  for_each = {
+    for k in [local.codepipeline_primary_region] : k => {
+      "region" : k
+    }
+  }
+  region = each.value.region
+  name   = "cdk-pipeline-state-notifications"
+  tags   = {
+    PipelineType = "CDK"
+    Purpose      = "StateMachineNotifications"
+  }
+}
+
+resource "aws_sns_topic_policy" "cdk_pipeline_notifications" {
+  for_each = aws_sns_topic.cdk_pipeline_notifications
+  region   = each.value.region
+  arn      = each.value.arn
+  policy = jsonencode({
+    Version = "2008-10-17"
+    Statement = [
+      {
+        Sid       = "DefaultStatement"
+        Effect    = "Allow"
+        Principal = { AWS = "*" }
+        Action    = ["SNS:Publish", "SNS:Subscribe", "SNS:Receive"]
+        Resource  = each.value.arn
+        Condition = {
+          StringEquals = {
+            "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
+# State Machine module instantiation
+module "cdk_pipeline_state_machine" {
+  source = "../../modules/pipeline-state-machine"
+
+  pipeline_type     = "cdk"
+  plan_stage_name   = "Diff"
+  deploy_stage_name = "Deploy"
+
+  notification_topic_arns = [for t in aws_sns_topic.cdk_pipeline_notifications : t.arn]
+  enable_xray             = true
+
+  tags = {
+    PipelineType = "CDK"
+    ManagedBy    = "terraform"
+  }
+}
+
+# Outputs to make state machine integration visible
+output "cdk_state_machine_integration" {
+  description = "State machine integration outputs for CDK pipelines"
+  value = {
+    # Exit codes - now centralized and documented
+    exit_codes = local.cdk_diff_exit_codes
+
+    # State machine references (created by module)
+    state_machine_arn = module.cdk_pipeline_state_machine.state_machine_arn_cdk
+
+    # Notification topic
+    notification_topic_arns = [for t in aws_sns_topic.cdk_pipeline_notifications : t.arn]
+
+    # Documentation reference
+    documentation = "See modules/pipeline-state-machine/README.md for details"
+  }
 }

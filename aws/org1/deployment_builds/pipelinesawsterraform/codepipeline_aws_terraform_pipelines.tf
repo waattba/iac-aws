@@ -5,6 +5,13 @@ locals {
   # Terraform plan exit code definitions for pipeline conditional logic
   # These values match terraform plan exit codes:
   # https://developer.hashicorp.com/terraform/cli/commands/plan#detailed-exit-codes
+  #
+  # IMPORTANT: Terraform uses DIFFERENT exit codes than CDK!
+  # - Terraform: 0=no changes, 2=changes found, 1=error
+  # - CDK: 0=no changes, 1=changes found, 2=error
+  #
+  # The state machine module normalizes these automatically.
+  # Keep these local definitions for backward compatibility.
   terraform_plan_exit_codes = {
     NO_CHANGES    = "0" # Succeeded with empty diff - skip Apply stage
     CHANGES_FOUND = "2" # Succeeded with non-empty diff - continue to Apply
@@ -476,4 +483,95 @@ resource "aws_codepipeline" "terraform" {
     }
   }
 
+}
+
+# ============================================================================
+# STATE MACHINE INTEGRATION
+# ============================================================================
+# The following modules instantiate explicit state machines that replace the
+# implicit state logic scattered throughout the codebase.
+#
+# Benefits:
+# - UX: Clear notifications about why stages are skipped
+# - DX: Centralized exit code handling in one module
+# - AX: Self-documenting workflows visible in Step Functions console
+#
+# These state machines are created alongside existing infrastructure and
+# do NOT break any existing pipelines. They provide visibility and optional
+# integration points for future enhancements.
+# ============================================================================
+
+# SNS Topic for state machine notifications (separate from rejection SNS)
+resource "aws_sns_topic" "terraform_pipeline_notifications" {
+  for_each = {
+    for k in [local.codepipeline_primary_region] : k => {
+      "region" : k
+    }
+  }
+  region = each.value.region
+  name   = "terraform-pipeline-state-notifications"
+  tags   = {
+    PipelineType = "Terraform"
+    Purpose      = "StateMachineNotifications"
+  }
+}
+
+resource "aws_sns_topic_policy" "terraform_pipeline_notifications" {
+  for_each = aws_sns_topic.terraform_pipeline_notifications
+  region   = each.value.region
+  arn      = each.value.arn
+  policy = jsonencode({
+    Version = "2008-10-17"
+    Statement = [
+      {
+        Sid       = "DefaultStatement"
+        Effect    = "Allow"
+        Principal = { AWS = "*" }
+        Action    = ["SNS:Publish", "SNS:Subscribe", "SNS:Receive"]
+        Resource  = each.value.arn
+        Condition = {
+          StringEquals = {
+            "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
+# State Machine module instantiation
+module "terraform_pipeline_state_machine" {
+  source = "../../modules/pipeline-state-machine"
+
+  pipeline_type     = "terraform"
+  plan_stage_name   = "Plan"
+  deploy_stage_name = "Apply"
+
+  notification_topic_arns = [for t in aws_sns_topic.terraform_pipeline_notifications : t.arn]
+  enable_xray             = true
+
+  tags = {
+    PipelineType = "Terraform"
+    ManagedBy    = "terraform"
+  }
+}
+
+# Outputs to make state machine integration visible
+output "terraform_state_machine_integration" {
+  description = "State machine integration outputs for Terraform pipelines"
+  value = {
+    # Exit codes - NOTE: Terraform uses different codes than CDK!
+    # 0 = no changes, 2 = changes found, 1 = error
+    # The state machine module normalizes these automatically.
+    exit_codes = local.terraform_plan_exit_codes
+
+    # State machine references (created by module)
+    state_machine_arn = module.terraform_pipeline_state_machine.state_machine_arn_terraform
+
+    # Notification topic
+    notification_topic_arns = [for t in aws_sns_topic.terraform_pipeline_notifications : t.arn]
+
+    # Documentation reference
+    documentation = "See modules/pipeline-state-machine/README.md for details"
+  }
 }
