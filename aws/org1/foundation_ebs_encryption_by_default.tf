@@ -1,50 +1,28 @@
 # Enable default EBS encryption by default across all governed regions
-# This ensures all new EBS volumes are automatically encrypted
+# Uses aws cli via local-exec to avoid terraform provider timeout issues
+# when multiple AWS provider aliases are configured.
 
-# Minimal provider aliases for multi-region support
-# These inherit configuration from the default provider
-
-provider "aws" {
-  alias  = "ca_west"
-  region = "ca-west-1"
+locals {
+  ebs_encryption_regions = [
+    "ca-central-1",
+    "ca-west-1",
+    "us-east-1",
+    "us-east-2",
+    "us-west-2",
+  ]
 }
 
-provider "aws" {
-  alias  = "us_east_1"
-  region = "us-east-1"
-}
+# Use null_resource with local-exec to enable EBS encryption via AWS CLI
+# This avoids the terraform provider timeout issue with multiple regions
+resource "null_resource" "ebs_encryption_by_default" {
+  for_each = toset(local.ebs_encryption_regions)
 
-provider "aws" {
-  alias  = "us_east_2"
-  region = "us-east-2"
-}
+  provisioner "local-exec" {
+    command = "aws ec2 enable-ebs-encryption-by-default --region ${each.value}"
+  }
 
-provider "aws" {
-  alias  = "us_west_2"
-  region = "us-west-2"
-}
-
-# Default provider is ca-central-1
-resource "aws_ebs_encryption_by_default" "ca_central_1" {
-  enabled = true
-}
-
-resource "aws_ebs_encryption_by_default" "ca_west_1" {
-  provider = aws.ca_west
-  enabled  = true
-}
-
-resource "aws_ebs_encryption_by_default" "us_east_1" {
-  provider = aws.us_east_1
-  enabled  = true
-}
-
-resource "aws_ebs_encryption_by_default" "us_east_2" {
-  provider = aws.us_east_2
-  enabled  = true
-}
-
-resource "aws_ebs_encryption_by_default" "us_west_2" {
-  provider = aws.us_west_2
-  enabled  = true
+  # Trigger on every apply to ensure encryption is enabled
+  triggers = {
+    always_run = timestamp()
+  }
 }
